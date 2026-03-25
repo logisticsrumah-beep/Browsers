@@ -16,19 +16,6 @@ interface Tab {
   sources: { title: string; uri: string }[];
 }
 
-interface SignLanguageChat {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-}
-
-const SIGN_LANGUAGES = [
-  { id: 'psl', name: 'Pakistan Sign Language (PSL)' },
-  { id: 'asl', name: 'American Sign Language (ASL)' },
-  { id: 'bsl', name: 'British Sign Language (BSL)' },
-  { id: 'isl', name: 'International Sign Language (ISL)' },
-];
-
 export default function App() {
   const [tabs, setTabs] = useState<Tab[]>([
     { id: '1', title: 'New Tab', query: '', response: '', isLoading: false, sources: [] }
@@ -37,14 +24,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [selectedImage, setSelectedImage] = useState<{ data: string; mimeType: string } | null>(null);
   const [isPSLMode, setIsPSLMode] = useState(false);
-  const [selectedSignLanguage, setSelectedSignLanguage] = useState('psl');
-  const [slChatHistory, setSlChatHistory] = useState<SignLanguageChat[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isAutoCapturing, setIsAutoCapturing] = useState(false);
-  const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(true);
-  const [isManualProcessing, setIsManualProcessing] = useState(false);
-  const [isAutoProcessing, setIsAutoProcessing] = useState(false);
-  const [quotaError, setQuotaError] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,62 +35,42 @@ export default function App() {
 
   const handleSearch = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    
-    const isManual = !!e;
-    if (isManual && isManualProcessing) return;
-    if (!isManual && (isAutoProcessing || isManualProcessing)) return;
-
     const queryToUse = input.trim();
     if (!queryToUse && !selectedImage && !isPSLMode) return;
 
     const currentImage = selectedImage;
     const currentPSLMode = isPSLMode;
+    setInput("");
+    setSelectedImage(null);
     
-    if (isManual) setIsManualProcessing(true);
-    else setIsAutoProcessing(true);
-    
-    // Update tab state for manual searches
-    if (isManual || !currentPSLMode) {
-      setInput("");
-      setSelectedImage(null);
-      setTabs(prev => prev.map(t => 
-        t.id === activeTabId 
-          ? { 
-              ...t, 
-              query: queryToUse || (currentPSLMode ? "Sign Interpretation" : "Image Search"), 
-              isLoading: true, 
-              response: '', 
-              sources: [], 
-              title: queryToUse ? (queryToUse.slice(0, 15) + (queryToUse.length > 15 ? '...' : '')) : 'Search' 
-            } 
-          : t
-      ));
-    }
+    // Update active tab state
+    setTabs(prev => prev.map(t => 
+      t.id === activeTabId 
+        ? { 
+            ...t, 
+            query: currentPSLMode ? "PSL Interpretation" : (queryToUse || "Image Search"), 
+            isLoading: true, 
+            response: '', 
+            sources: [], 
+            title: currentPSLMode ? "PSL Assistant" : (queryToUse ? (queryToUse.slice(0, 15) + (queryToUse.length > 15 ? '...' : '')) : 'Image Search') 
+          } 
+        : t
+    ));
 
     try {
-      setQuotaError(false);
       const parts: any[] = [];
       
-      if (currentPSLMode && !queryToUse && videoRef.current && canvasRef.current) {
+      if (currentPSLMode && videoRef.current && canvasRef.current) {
         const canvas = canvasRef.current;
         const video = videoRef.current;
-        
-        if (video.readyState < 2 || video.videoWidth === 0) {
-          if (isManual) setIsManualProcessing(false);
-          else setIsAutoProcessing(false);
-          return;
-        }
-
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(video, 0, 0);
-        const base64Frame = canvas.toDataURL('image/jpeg', 0.3).split(',')[1]; 
-        
-        const langName = SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name || "Sign Language";
+        const base64Frame = canvas.toDataURL('image/jpeg').split(',')[1];
         
         parts.push({
-          text: `Interpret this frame as ${langName}. If someone is signing, translate the sign to a word or short phrase. If no sign is clearly visible but a person is present, describe their posture briefly. If the scene is empty, respond with "Waiting...". Keep responses under 10 words.`
+          text: "Interpret this frame as Pakistan Sign Language (PSL). Tell me what it means and respond in a way that helps someone who uses PSL. If possible, describe the signs used."
         });
         parts.push({
           inlineData: {
@@ -134,68 +94,28 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: { parts },
         config: {
-          systemInstruction: currentPSLMode ? `You are a ${SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name} expert. Translate signs to text accurately and concisely.` : undefined,
-          tools: (currentPSLMode && !queryToUse) ? [] : [{ googleSearch: {} }],
+          systemInstruction: currentPSLMode ? "You are a Pakistan Sign Language (PSL) expert. Your goal is to interpret signs from images/frames and provide clear, helpful responses. If the user is signing, translate it to text and respond with the meaning and how to sign back if applicable." : undefined,
+          tools: currentPSLMode ? [] : [{ googleSearch: {} }],
         },
       });
 
-      const text = response.text || "";
-      
-      if (currentPSLMode && !queryToUse) {
-        const lowerText = text.toLowerCase();
-        if (!lowerText.includes("waiting") && text.trim().length > 0) {
-          setSlChatHistory(prev => {
-            if (prev.length > 0 && prev[prev.length - 1].content === text) return prev;
-            return [...prev, { role: 'assistant', content: text, timestamp: Date.now() }];
-          });
-        }
-      } else {
-        const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
-          ?.filter(chunk => chunk.web)
-          ?.map(chunk => ({ title: chunk.web!.title || 'Source', uri: chunk.web!.uri })) || [];
-
-        if (currentPSLMode && queryToUse) {
-          setSlChatHistory(prev => [
-            ...prev, 
-            { role: 'user', content: queryToUse, timestamp: Date.now() },
-            { role: 'assistant', content: text, timestamp: Date.now() }
-          ]);
-        }
-
-        setTabs(prev => prev.map(t => 
-          t.id === activeTabId 
-            ? { ...t, response: text, sources, isLoading: false } 
-            : t
-        ));
-      }
-    } catch (error: any) {
-      console.error("Search error:", error);
-      
-      const isQuotaError = error?.message?.includes("429") || error?.message?.includes("RESOURCE_EXHAUSTED");
-      const errorMsg = isQuotaError 
-        ? "Quota exceeded. The AI needs a short break (usually 1 minute). Please disable Auto-Capture to save quota." 
-        : "Error: Could not fetch results. Please try again.";
-
-      if (isQuotaError) {
-        setQuotaError(true);
-        if (!isManual) setIsAutoCapturing(false);
-      }
-
-      if (currentPSLMode) {
-        setSlChatHistory(prev => [
-          ...prev,
-          { role: 'assistant', content: `⚠️ ${errorMsg}`, timestamp: Date.now() }
-        ]);
-      }
+      const text = response.text || "No response generated.";
+      const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
+        ?.filter(chunk => chunk.web)
+        ?.map(chunk => ({ title: chunk.web!.title || 'Source', uri: chunk.web!.uri })) || [];
 
       setTabs(prev => prev.map(t => 
         t.id === activeTabId 
-          ? { ...t, response: errorMsg, isLoading: false } 
+          ? { ...t, response: text, sources, isLoading: false } 
           : t
       ));
-    } finally {
-      if (isManual) setIsManualProcessing(false);
-      else setIsAutoProcessing(false);
+    } catch (error) {
+      console.error("Search error:", error);
+      setTabs(prev => prev.map(t => 
+        t.id === activeTabId 
+          ? { ...t, response: "Error: Could not fetch results. Please try again.", isLoading: false } 
+          : t
+      ));
     }
   };
 
@@ -263,21 +183,6 @@ export default function App() {
       setActiveTabId(newTabs[newTabs.length - 1].id);
     }
   };
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isPSLMode && isCameraActive && autoCaptureEnabled && !quotaError) {
-      setIsAutoCapturing(true);
-      interval = setInterval(() => {
-        if (!isAutoProcessing && !isManualProcessing) {
-          handleSearch();
-        }
-      }, 15000); // Increased to 15 seconds to respect quota
-    } else {
-      setIsAutoCapturing(false);
-    }
-    return () => clearInterval(interval);
-  }, [isPSLMode, isCameraActive, selectedSignLanguage, isAutoProcessing, isManualProcessing, autoCaptureEnabled, quotaError]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -402,23 +307,10 @@ export default function App() {
           ref={scrollRef}
           className="h-full overflow-y-auto px-6 py-8 md:px-12 lg:px-24"
         >
-          {isPSLMode && (
-            <div className="flex flex-col items-center max-w-4xl mx-auto space-y-6 mb-12">
-              <div className="w-full flex flex-col space-y-6">
-                {/* Camera Section - Always at Top */}
-                <div className="w-full max-w-2xl mx-auto space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-xl font-bold text-[#202124] flex items-center gap-2">
-                      <Camera className="w-5 h-5 text-[#1a73e8]" />
-                      Sign Language AI Emulator
-                    </h2>
-                    {isAutoCapturing && (
-                      <div className="flex items-center gap-2 text-[#1a73e8] text-xs font-medium animate-pulse">
-                        <div className="w-2 h-2 rounded-full bg-[#1a73e8]" />
-                        Auto-Capturing...
-                      </div>
-                    )}
-                  </div>
+          {!activeTab.query && !activeTab.isLoading && (
+            <div className="flex flex-col items-center justify-center h-full max-w-2xl mx-auto text-center space-y-8">
+              {isPSLMode ? (
+                <div className="w-full max-w-md space-y-4">
                   <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border-4 border-[#1a73e8] shadow-2xl">
                     <video 
                       ref={videoRef} 
@@ -438,148 +330,56 @@ export default function App() {
                         <p>{cameraError}</p>
                       </div>
                     )}
-                  </div>
-                </div>
-
-                {/* Controls Section - Below Camera */}
-                <div className="flex flex-wrap items-center justify-center gap-6 bg-white p-6 rounded-xl border border-[#dadce0] shadow-sm">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold text-[#5f6368] uppercase">Select Language</label>
-                    <select 
-                      value={selectedSignLanguage}
-                      onChange={(e) => setSelectedSignLanguage(e.target.value)}
-                      className="text-sm bg-[#f1f3f4] border border-[#dadce0] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#8ab4f8] min-w-[200px]"
-                    >
-                      {SIGN_LANGUAGES.map(lang => (
-                        <option key={lang.id} value={lang.id}>{lang.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <label className="text-[10px] font-bold text-[#5f6368] uppercase">Auto-Capture</label>
-                    <div className="flex items-center gap-2">
+                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
                       <button 
-                        onClick={() => {
-                          setAutoCaptureEnabled(!autoCaptureEnabled);
-                          setQuotaError(false);
-                        }}
-                        className={cn(
-                          "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
-                          autoCaptureEnabled ? "bg-[#e8f0fe] text-[#1a73e8] border border-[#1a73e8]" : "bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0]"
-                        )}
+                        onClick={() => handleSearch()}
+                        className="bg-[#1a73e8] text-white px-6 py-2 rounded-full font-bold shadow-lg hover:bg-[#1557b0] transition-all flex items-center gap-2"
                       >
-                        {autoCaptureEnabled ? "Enabled (15s)" : "Disabled"}
+                        <Camera className="w-5 h-5" />
+                        Capture Sign
                       </button>
-                      {!autoCaptureEnabled && (
-                        <button 
-                          onClick={() => handleSearch()}
-                          disabled={isManualProcessing || isAutoProcessing}
-                          className="flex items-center gap-2 bg-[#1a73e8] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1557b0] disabled:opacity-50 transition-all"
-                        >
-                          <Camera className="w-4 h-4" />
-                          Capture Now
-                        </button>
-                      )}
                     </div>
                   </div>
-
-                  <button 
-                    onClick={() => {
-                      setSlChatHistory([]);
-                      setQuotaError(false);
-                      setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, query: '', response: '', sources: [] } : t));
-                    }}
-                    className="flex items-center gap-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#202124] px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-4 sm:mt-0"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    New Chat / Refresh
-                  </button>
-                </div>
-
-                {quotaError && (
-                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
-                    <X className="w-4 h-4" />
-                    <p>
-                      <strong>Quota Exceeded:</strong> AI is resting. Please wait a minute or disable Auto-Capture to use manual search.
-                    </p>
-                    <button 
-                      onClick={() => setQuotaError(false)}
-                      className="ml-auto text-red-900 font-bold"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                )}
-
-                {/* Chat History Section - Bottom */}
-                <div className="bg-[#f8f9fa] rounded-2xl border border-[#dadce0] flex flex-col overflow-hidden shadow-inner min-h-[300px]">
-                  <div className="bg-white border-b border-[#dadce0] px-4 py-3 flex items-center justify-between">
-                    <span className="text-sm font-bold text-[#202124]">Sign Language Chat History</span>
-                    <span className="text-[10px] text-[#5f6368]">AI is listening to your signs...</span>
-                  </div>
-                  <div className="flex-grow overflow-y-auto p-4 space-y-4 max-h-[400px]">
-                    {slChatHistory.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-[#5f6368] space-y-2 opacity-60 py-12">
-                        <Hand className="w-12 h-12" />
-                        <p className="text-sm">No signs detected yet. Start signing in front of the camera!</p>
-                      </div>
-                    ) : (
-                      [...slChatHistory].reverse().map((msg, i) => (
-                        <div key={i} className={cn(
-                          "flex flex-col max-w-[90%]",
-                          msg.role === 'user' ? "ml-auto items-end" : "items-start"
-                        )}>
-                          <div className={cn(
-                            "px-4 py-3 rounded-2xl text-sm shadow-sm",
-                            msg.role === 'user' 
-                              ? "bg-[#1a73e8] text-white rounded-tr-none" 
-                              : "bg-white border border-[#dadce0] text-[#202124] rounded-tl-none"
-                          )}>
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                          </div>
-                          <span className="text-[9px] text-[#5f6368] mt-1 px-1">
-                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                      ))
-                    )}
+                  <div className="space-y-2">
+                    <h2 className="text-2xl font-bold text-[#202124]">PSL Assistant Active</h2>
+                    <p className="text-[#5f6368]">Position yourself in the camera and perform a sign, then click "Capture Sign".</p>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {!isPSLMode && !activeTab.query && !activeTab.isLoading && (
-            <div className="flex flex-col items-center justify-center h-full max-w-4xl mx-auto text-center space-y-8">
-              <div className="w-20 h-20 bg-[#f1f3f4] rounded-2xl flex items-center justify-center animate-pulse">
-                <Globe className="w-10 h-10 text-[#1a73e8]" />
-              </div>
-              <div className="space-y-2">
-                <h1 className="text-4xl font-bold tracking-tight text-[#202124]">Gemini Flash Browser</h1>
-                <p className="text-[#5f6368] text-lg">Search the web with the speed of Flash and the intelligence of Gemini.</p>
-              </div>
+              ) : (
+                <>
+                  <div className="w-20 h-20 bg-[#f1f3f4] rounded-2xl flex items-center justify-center animate-pulse">
+                    <Globe className="w-10 h-10 text-[#1a73e8]" />
+                  </div>
+                  <div className="space-y-2">
+                    <h1 className="text-4xl font-bold tracking-tight text-[#202124]">Gemini Flash Browser</h1>
+                    <p className="text-[#5f6368] text-lg">Search the web with the speed of Flash and the intelligence of Gemini.</p>
+                  </div>
+                </>
+              )}
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-                {[
-                  "Latest tech news today",
-                  "How to bake sourdough bread",
-                  "Best travel destinations for 2024",
-                  "Explain quantum computing simply"
-                ].map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    onClick={() => {
-                      setInput(suggestion);
-                      const fakeEvent = { preventDefault: () => {} } as any;
-                      setTimeout(() => handleSearch(fakeEvent), 0);
-                    }}
-                    className="p-4 border border-[#dadce0] rounded-xl text-left hover:bg-[#f8f9fa] hover:border-[#8ab4f8] transition-all group"
-                  >
-                    <span className="text-sm font-medium text-[#202124] group-hover:text-[#1a73e8]">{suggestion}</span>
-                  </button>
-                ))}
-              </div>
+              {!isPSLMode && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                  {[
+                    "Latest tech news today",
+                    "How to bake sourdough bread",
+                    "Best travel destinations for 2024",
+                    "Explain quantum computing simply"
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => {
+                        setInput(suggestion);
+                        // Trigger search immediately
+                        const fakeEvent = { preventDefault: () => {} } as any;
+                        setTimeout(() => handleSearch(fakeEvent), 0);
+                      }}
+                      className="p-4 border border-[#dadce0] rounded-xl text-left hover:bg-[#f8f9fa] hover:border-[#8ab4f8] transition-all group"
+                    >
+                      <span className="text-sm font-medium text-[#202124] group-hover:text-[#1a73e8]">{suggestion}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -590,6 +390,10 @@ export default function App() {
                 <div className="h-4 bg-[#f1f3f4] rounded animate-pulse" />
                 <div className="h-4 bg-[#f1f3f4] rounded animate-pulse" />
                 <div className="h-4 bg-[#f1f3f4] rounded w-5/6 animate-pulse" />
+              </div>
+              <div className="flex gap-2">
+                <div className="h-8 bg-[#f1f3f4] rounded-full w-24 animate-pulse" />
+                <div className="h-8 bg-[#f1f3f4] rounded-full w-24 animate-pulse" />
               </div>
             </div>
           )}
