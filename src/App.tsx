@@ -40,6 +40,7 @@ export default function App() {
   const [selectedSignLanguage, setSelectedSignLanguage] = useState('psl');
   const [slChatHistory, setSlChatHistory] = useState<SignLanguageChat[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isAutoCapturing, setIsAutoCapturing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -78,16 +79,20 @@ export default function App() {
       if (currentPSLMode && videoRef.current && canvasRef.current) {
         const canvas = canvasRef.current;
         const video = videoRef.current;
+        
+        // Ensure video is ready
+        if (video.videoWidth === 0) return;
+
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(video, 0, 0);
-        const base64Frame = canvas.toDataURL('image/jpeg').split(',')[1];
+        const base64Frame = canvas.toDataURL('image/jpeg', 0.5).split(',')[1]; // Lower quality for faster processing
         
         const langName = SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name || "Sign Language";
         
         parts.push({
-          text: `Interpret this frame as ${langName}. Tell me what it means and respond in a way that helps someone who uses this sign language. If possible, describe the signs used.`
+          text: `Interpret this frame as ${langName}. If someone is signing, translate it to text. If no clear sign is visible, just say "Waiting for sign...". Keep responses brief and helpful for a chat.`
         });
         parts.push({
           inlineData: {
@@ -111,7 +116,7 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: { parts },
         config: {
-          systemInstruction: currentPSLMode ? `You are a ${SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name} expert. Your goal is to interpret signs from images/frames and provide clear, helpful responses. If the user is signing, translate it to text and respond with the meaning and how to sign back if applicable.` : undefined,
+          systemInstruction: currentPSLMode ? `You are a ${SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name} expert. Your goal is to interpret signs from images/frames and provide clear, helpful responses. If the user is signing, translate it to text. If nothing is happening, respond with a very short status message.` : undefined,
           tools: currentPSLMode ? [] : [{ googleSearch: {} }],
         },
       });
@@ -119,10 +124,14 @@ export default function App() {
       const text = response.text || "No response generated.";
       
       if (currentPSLMode) {
-        setSlChatHistory(prev => [...prev, 
-          { role: 'user', content: 'Captured Sign', timestamp: Date.now() },
-          { role: 'assistant', content: text, timestamp: Date.now() }
-        ]);
+        // Only add to history if it's not just a "waiting" message
+        if (!text.toLowerCase().includes("waiting for sign")) {
+          setSlChatHistory(prev => {
+            // Avoid duplicate consecutive messages if AI repeats itself
+            if (prev.length > 0 && prev[prev.length - 1].content === text) return prev;
+            return [...prev, { role: 'assistant', content: text, timestamp: Date.now() }];
+          });
+        }
       }
       const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
         ?.filter(chunk => chunk.web)
@@ -207,6 +216,19 @@ export default function App() {
       setActiveTabId(newTabs[newTabs.length - 1].id);
     }
   };
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isPSLMode && isCameraActive) {
+      setIsAutoCapturing(true);
+      interval = setInterval(() => {
+        handleSearch();
+      }, 5000); // Auto-capture every 5 seconds
+    } else {
+      setIsAutoCapturing(false);
+    }
+    return () => clearInterval(interval);
+  }, [isPSLMode, isCameraActive, selectedSignLanguage]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -332,25 +354,22 @@ export default function App() {
           className="h-full overflow-y-auto px-6 py-8 md:px-12 lg:px-24"
         >
           {!activeTab.query && !activeTab.isLoading && (
-            <div className="flex flex-col items-center justify-center h-full max-w-4xl mx-auto text-center space-y-8">
+            <div className="flex flex-col items-center h-full max-w-4xl mx-auto space-y-6">
               {isPSLMode ? (
-                <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                  {/* Camera Section */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between mb-2">
+                <div className="w-full flex flex-col space-y-6">
+                  {/* Camera Section - Always at Top */}
+                  <div className="w-full max-w-2xl mx-auto space-y-4">
+                    <div className="flex items-center justify-between">
                       <h2 className="text-xl font-bold text-[#202124] flex items-center gap-2">
                         <Camera className="w-5 h-5 text-[#1a73e8]" />
                         Sign Language AI Emulator
                       </h2>
-                      <select 
-                        value={selectedSignLanguage}
-                        onChange={(e) => setSelectedSignLanguage(e.target.value)}
-                        className="text-xs bg-white border border-[#dadce0] rounded-md px-2 py-1 outline-none focus:ring-2 focus:ring-[#8ab4f8]"
-                      >
-                        {SIGN_LANGUAGES.map(lang => (
-                          <option key={lang.id} value={lang.id}>{lang.name}</option>
-                        ))}
-                      </select>
+                      {isAutoCapturing && (
+                        <div className="flex items-center gap-2 text-[#1a73e8] text-xs font-medium animate-pulse">
+                          <div className="w-2 h-2 rounded-full bg-[#1a73e8]" />
+                          Auto-Capturing...
+                        </div>
+                      )}
                     </div>
                     <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border-4 border-[#1a73e8] shadow-2xl">
                       <video 
@@ -371,51 +390,59 @@ export default function App() {
                           <p>{cameraError}</p>
                         </div>
                       )}
-                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
-                        <button 
-                          onClick={() => handleSearch()}
-                          className="bg-[#1a73e8] text-white px-8 py-3 rounded-full font-bold shadow-lg hover:bg-[#1557b0] transition-all flex items-center gap-2 active:scale-95"
-                        >
-                          <Camera className="w-5 h-5" />
-                          Capture Sign
-                        </button>
-                      </div>
                     </div>
-                    <p className="text-xs text-[#5f6368]">Position yourself clearly and click capture for AI interpretation.</p>
                   </div>
 
-                  {/* Chat History Section */}
-                  <div className="bg-[#f8f9fa] rounded-2xl border border-[#dadce0] h-[400px] lg:h-[450px] flex flex-col overflow-hidden shadow-inner">
-                    <div className="bg-white border-b border-[#dadce0] px-4 py-3 flex items-center justify-between">
-                      <span className="text-sm font-bold text-[#202124]">Sign Language Chat</span>
-                      <button 
-                        onClick={() => setSlChatHistory([])}
-                        className="text-[10px] text-[#5f6368] hover:text-red-500 font-medium"
+                  {/* Controls Section - Below Camera */}
+                  <div className="flex flex-wrap items-center justify-center gap-4 bg-white p-4 rounded-xl border border-[#dadce0] shadow-sm">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-bold text-[#5f6368] uppercase">Select Language</label>
+                      <select 
+                        value={selectedSignLanguage}
+                        onChange={(e) => setSelectedSignLanguage(e.target.value)}
+                        className="text-sm bg-[#f1f3f4] border border-[#dadce0] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#8ab4f8] min-w-[200px]"
                       >
-                        Clear Chat
-                      </button>
+                        {SIGN_LANGUAGES.map(lang => (
+                          <option key={lang.id} value={lang.id}>{lang.name}</option>
+                        ))}
+                      </select>
                     </div>
-                    <div className="flex-grow overflow-y-auto p-4 space-y-4">
+                    <button 
+                      onClick={() => setSlChatHistory([])}
+                      className="flex items-center gap-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#202124] px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-4"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      New Chat / Refresh
+                    </button>
+                  </div>
+
+                  {/* Chat History Section - Bottom */}
+                  <div className="bg-[#f8f9fa] rounded-2xl border border-[#dadce0] flex-grow flex flex-col overflow-hidden shadow-inner min-h-[300px]">
+                    <div className="bg-white border-b border-[#dadce0] px-4 py-3 flex items-center justify-between">
+                      <span className="text-sm font-bold text-[#202124]">Sign Language Chat History</span>
+                      <span className="text-[10px] text-[#5f6368]">AI is listening to your signs...</span>
+                    </div>
+                    <div className="flex-grow overflow-y-auto p-4 space-y-4 max-h-[500px]">
                       {slChatHistory.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-[#5f6368] space-y-2 opacity-60">
-                          <Hand className="w-8 h-8" />
-                          <p className="text-xs">No messages yet. Start signing!</p>
+                        <div className="h-full flex flex-col items-center justify-center text-[#5f6368] space-y-2 opacity-60 py-12">
+                          <Hand className="w-12 h-12" />
+                          <p className="text-sm">No signs detected yet. Start signing in front of the camera!</p>
                         </div>
                       ) : (
-                        slChatHistory.map((msg, i) => (
+                        [...slChatHistory].reverse().map((msg, i) => (
                           <div key={i} className={cn(
-                            "flex flex-col max-w-[85%]",
+                            "flex flex-col max-w-[90%]",
                             msg.role === 'user' ? "ml-auto items-end" : "items-start"
                           )}>
                             <div className={cn(
-                              "px-3 py-2 rounded-2xl text-sm",
+                              "px-4 py-3 rounded-2xl text-sm shadow-sm",
                               msg.role === 'user' 
                                 ? "bg-[#1a73e8] text-white rounded-tr-none" 
                                 : "bg-white border border-[#dadce0] text-[#202124] rounded-tl-none"
                             )}>
                               <ReactMarkdown>{msg.content}</ReactMarkdown>
                             </div>
-                            <span className="text-[9px] text-[#5f6368] mt-1">
+                            <span className="text-[9px] text-[#5f6368] mt-1 px-1">
                               {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
