@@ -41,6 +41,7 @@ export default function App() {
   const [slChatHistory, setSlChatHistory] = useState<SignLanguageChat[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isAutoCapturing, setIsAutoCapturing] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -51,24 +52,30 @@ export default function App() {
 
   const handleSearch = async (e?: React.FormEvent) => {
     e?.preventDefault();
+    if (isProcessing) return; // Prevent concurrent requests
+
     const queryToUse = input.trim();
     if (!queryToUse && !selectedImage && !isPSLMode) return;
 
     const currentImage = selectedImage;
     const currentPSLMode = isPSLMode;
-    setInput("");
-    setSelectedImage(null);
+    
+    setIsProcessing(true);
+    if (!currentPSLMode) {
+      setInput("");
+      setSelectedImage(null);
+    }
     
     // Update active tab state
     setTabs(prev => prev.map(t => 
       t.id === activeTabId 
         ? { 
             ...t, 
-            query: currentPSLMode ? "PSL Interpretation" : (queryToUse || "Image Search"), 
-            isLoading: true, 
-            response: '', 
-            sources: [], 
-            title: currentPSLMode ? "PSL Assistant" : (queryToUse ? (queryToUse.slice(0, 15) + (queryToUse.length > 15 ? '...' : '')) : 'Image Search') 
+            query: currentPSLMode ? (t.query || "Sign Language Mode") : (queryToUse || "Image Search"), 
+            isLoading: !currentPSLMode, // Don't show full-page loading in sign mode
+            response: currentPSLMode ? t.response : '', 
+            sources: currentPSLMode ? t.sources : [], 
+            title: currentPSLMode ? "Sign Language Assistant" : (queryToUse ? (queryToUse.slice(0, 15) + (queryToUse.length > 15 ? '...' : '')) : 'Image Search') 
           } 
         : t
     ));
@@ -80,19 +87,22 @@ export default function App() {
         const canvas = canvasRef.current;
         const video = videoRef.current;
         
-        // Ensure video is ready
-        if (video.videoWidth === 0) return;
+        // Ensure video is ready and playing
+        if (video.readyState < 2 || video.videoWidth === 0) {
+          setIsProcessing(false);
+          return;
+        }
 
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(video, 0, 0);
-        const base64Frame = canvas.toDataURL('image/jpeg', 0.5).split(',')[1]; // Lower quality for faster processing
+        const base64Frame = canvas.toDataURL('image/jpeg', 0.4).split(',')[1]; 
         
         const langName = SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name || "Sign Language";
         
         parts.push({
-          text: `Interpret this frame as ${langName}. If someone is signing, translate it to text. If no clear sign is visible, just say "Waiting for sign...". Keep responses brief and helpful for a chat.`
+          text: `Interpret this frame as ${langName}. If someone is signing, translate it to text. If no clear sign is visible, respond with exactly "Waiting...". Keep responses very brief.`
         });
         parts.push({
           inlineData: {
@@ -116,39 +126,45 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: { parts },
         config: {
-          systemInstruction: currentPSLMode ? `You are a ${SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name} expert. Your goal is to interpret signs from images/frames and provide clear, helpful responses. If the user is signing, translate it to text. If nothing is happening, respond with a very short status message.` : undefined,
+          systemInstruction: currentPSLMode ? `You are a ${SIGN_LANGUAGES.find(l => l.id === selectedSignLanguage)?.name} expert. Your goal is to interpret signs from images/frames and provide clear, helpful responses. If the user is signing, translate it to text. If nothing is happening, respond with "Waiting...".` : undefined,
           tools: currentPSLMode ? [] : [{ googleSearch: {} }],
         },
       });
 
-      const text = response.text || "No response generated.";
+      const text = response.text || "";
       
       if (currentPSLMode) {
         // Only add to history if it's not just a "waiting" message
-        if (!text.toLowerCase().includes("waiting for sign")) {
+        const lowerText = text.toLowerCase();
+        if (!lowerText.includes("waiting") && text.trim().length > 0) {
           setSlChatHistory(prev => {
-            // Avoid duplicate consecutive messages if AI repeats itself
+            // Avoid duplicate consecutive messages
             if (prev.length > 0 && prev[prev.length - 1].content === text) return prev;
             return [...prev, { role: 'assistant', content: text, timestamp: Date.now() }];
           });
         }
       }
+      
       const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
         ?.filter(chunk => chunk.web)
         ?.map(chunk => ({ title: chunk.web!.title || 'Source', uri: chunk.web!.uri })) || [];
 
       setTabs(prev => prev.map(t => 
         t.id === activeTabId 
-          ? { ...t, response: text, sources, isLoading: false } 
+          ? { ...t, response: currentPSLMode ? (text || t.response) : text, sources, isLoading: false } 
           : t
       ));
     } catch (error) {
       console.error("Search error:", error);
-      setTabs(prev => prev.map(t => 
-        t.id === activeTabId 
-          ? { ...t, response: "Error: Could not fetch results. Please try again.", isLoading: false } 
-          : t
-      ));
+      if (!currentPSLMode) {
+        setTabs(prev => prev.map(t => 
+          t.id === activeTabId 
+            ? { ...t, response: "Error: Could not fetch results. Please try again.", isLoading: false } 
+            : t
+        ));
+      }
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -222,13 +238,15 @@ export default function App() {
     if (isPSLMode && isCameraActive) {
       setIsAutoCapturing(true);
       interval = setInterval(() => {
-        handleSearch();
-      }, 5000); // Auto-capture every 5 seconds
+        if (!isProcessing) {
+          handleSearch();
+        }
+      }, 7000); // Increased interval to 7 seconds to avoid rate limits
     } else {
       setIsAutoCapturing(false);
     }
     return () => clearInterval(interval);
-  }, [isPSLMode, isCameraActive, selectedSignLanguage]);
+  }, [isPSLMode, isCameraActive, selectedSignLanguage, isProcessing]);
 
   useEffect(() => {
     if (scrollRef.current) {
