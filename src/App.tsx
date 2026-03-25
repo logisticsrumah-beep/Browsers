@@ -41,8 +41,10 @@ export default function App() {
   const [slChatHistory, setSlChatHistory] = useState<SignLanguageChat[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isAutoCapturing, setIsAutoCapturing] = useState(false);
+  const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(true);
   const [isManualProcessing, setIsManualProcessing] = useState(false);
   const [isAutoProcessing, setIsAutoProcessing] = useState(false);
+  const [quotaError, setQuotaError] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -86,6 +88,7 @@ export default function App() {
     }
 
     try {
+      setQuotaError(false);
       const parts: any[] = [];
       
       if (currentPSLMode && !queryToUse && videoRef.current && canvasRef.current) {
@@ -165,11 +168,29 @@ export default function App() {
             : t
         ));
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Search error:", error);
+      
+      const isQuotaError = error?.message?.includes("429") || error?.message?.includes("RESOURCE_EXHAUSTED");
+      const errorMsg = isQuotaError 
+        ? "Quota exceeded. The AI needs a short break (usually 1 minute). Please disable Auto-Capture to save quota." 
+        : "Error: Could not fetch results. Please try again.";
+
+      if (isQuotaError) {
+        setQuotaError(true);
+        if (!isManual) setIsAutoCapturing(false);
+      }
+
+      if (currentPSLMode) {
+        setSlChatHistory(prev => [
+          ...prev,
+          { role: 'assistant', content: `⚠️ ${errorMsg}`, timestamp: Date.now() }
+        ]);
+      }
+
       setTabs(prev => prev.map(t => 
         t.id === activeTabId 
-          ? { ...t, response: "Error: Could not fetch results. Please try again.", isLoading: false } 
+          ? { ...t, response: errorMsg, isLoading: false } 
           : t
       ));
     } finally {
@@ -245,18 +266,18 @@ export default function App() {
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (isPSLMode && isCameraActive) {
+    if (isPSLMode && isCameraActive && autoCaptureEnabled && !quotaError) {
       setIsAutoCapturing(true);
       interval = setInterval(() => {
         if (!isAutoProcessing && !isManualProcessing) {
           handleSearch();
         }
-      }, 8000); // Increased to 8 seconds for stability
+      }, 15000); // Increased to 15 seconds to respect quota
     } else {
       setIsAutoCapturing(false);
     }
     return () => clearInterval(interval);
-  }, [isPSLMode, isCameraActive, selectedSignLanguage, isAutoProcessing, isManualProcessing]);
+  }, [isPSLMode, isCameraActive, selectedSignLanguage, isAutoProcessing, isManualProcessing, autoCaptureEnabled, quotaError]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -421,7 +442,7 @@ export default function App() {
                 </div>
 
                 {/* Controls Section - Below Camera */}
-                <div className="flex flex-wrap items-center justify-center gap-4 bg-white p-4 rounded-xl border border-[#dadce0] shadow-sm">
+                <div className="flex flex-wrap items-center justify-center gap-6 bg-white p-6 rounded-xl border border-[#dadce0] shadow-sm">
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] font-bold text-[#5f6368] uppercase">Select Language</label>
                     <select 
@@ -434,17 +455,62 @@ export default function App() {
                       ))}
                     </select>
                   </div>
+
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-bold text-[#5f6368] uppercase">Auto-Capture</label>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => {
+                          setAutoCaptureEnabled(!autoCaptureEnabled);
+                          setQuotaError(false);
+                        }}
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                          autoCaptureEnabled ? "bg-[#e8f0fe] text-[#1a73e8] border border-[#1a73e8]" : "bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0]"
+                        )}
+                      >
+                        {autoCaptureEnabled ? "Enabled (15s)" : "Disabled"}
+                      </button>
+                      {!autoCaptureEnabled && (
+                        <button 
+                          onClick={() => handleSearch()}
+                          disabled={isManualProcessing || isAutoProcessing}
+                          className="flex items-center gap-2 bg-[#1a73e8] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1557b0] disabled:opacity-50 transition-all"
+                        >
+                          <Camera className="w-4 h-4" />
+                          Capture Now
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   <button 
                     onClick={() => {
                       setSlChatHistory([]);
+                      setQuotaError(false);
                       setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, query: '', response: '', sources: [] } : t));
                     }}
-                    className="flex items-center gap-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#202124] px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-4"
+                    className="flex items-center gap-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#202124] px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-4 sm:mt-0"
                   >
                     <RotateCcw className="w-4 h-4" />
                     New Chat / Refresh
                   </button>
                 </div>
+
+                {quotaError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                    <X className="w-4 h-4" />
+                    <p>
+                      <strong>Quota Exceeded:</strong> AI is resting. Please wait a minute or disable Auto-Capture to use manual search.
+                    </p>
+                    <button 
+                      onClick={() => setQuotaError(false)}
+                      className="ml-auto text-red-900 font-bold"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
 
                 {/* Chat History Section - Bottom */}
                 <div className="bg-[#f8f9fa] rounded-2xl border border-[#dadce0] flex flex-col overflow-hidden shadow-inner min-h-[300px]">
