@@ -1,0 +1,5 @@
+{
+  "name": "Gemini Flash Browser",
+  "description": "An AI-powered browsing assistant that uses Gemini 3 Flash to search and summarize the web, with Pakistan Sign Language (PSL) support.",
+  "requestFramePermissions": ["camera"]
+}
