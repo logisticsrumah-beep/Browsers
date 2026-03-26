@@ -1,5 +1,5 @@
 {
-  "name": "Gemini Flash Browser",
-  "description": "An AI-powered browsing assistant that uses Gemini 3 Flash to search and summarize the web, with Pakistan Sign Language (PSL) support.",
+  "name": "SignBridge AI",
+  "description": "An AI-powered dashboard for Deaf individuals, featuring sign language interpretation and real-time chat using Gemini 3 Flash.",
   "requestFramePermissions": ["camera"]
 }
