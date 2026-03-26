@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import ReactMarkdown from "react-markdown";
+import { Toaster, toast } from "sonner";
 import { cn } from "./lib/utils";
 
 // Initialize Gemini
@@ -51,6 +52,7 @@ export default function App() {
   const [inputText, setInputText] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
+  const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
 
   // Detect mobile screen size
   useEffect(() => {
@@ -65,6 +67,15 @@ export default function App() {
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setIsLangMenuOpen(false);
+    if (isLangMenuOpen) {
+      window.addEventListener("click", handleClickOutside);
+    }
+    return () => window.removeEventListener("click", handleClickOutside);
+  }, [isLangMenuOpen]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -183,6 +194,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#F5F5F0] font-sans text-[#1A1A1A] overflow-hidden relative">
+      <Toaster position="top-center" expand={false} richColors />
       {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
         {isMobile && isSidebarOpen && (
@@ -214,14 +226,14 @@ export default function App() {
 
         <nav className="flex-grow px-4 space-y-2">
           <NavItem icon={<LayoutDashboard />} label="Dashboard" active isOpen={isSidebarOpen} />
-          <NavItem icon={<MessageSquare />} label="Chats" isOpen={isSidebarOpen} />
-          <NavItem icon={<History />} label="History" isOpen={isSidebarOpen} />
-          <NavItem icon={<Settings />} label="Settings" isOpen={isSidebarOpen} />
+          <NavItem icon={<MessageSquare />} label="Chats" isOpen={isSidebarOpen} onClick={() => toast.info("Chats feature coming soon")} />
+          <NavItem icon={<History />} label="History" isOpen={isSidebarOpen} onClick={() => toast.info("History feature coming soon")} />
+          <NavItem icon={<Settings />} label="Settings" isOpen={isSidebarOpen} onClick={() => toast.info("Settings feature coming soon")} />
         </nav>
 
         <div className="p-4 border-t border-[#E5E5E0] space-y-2">
-          <NavItem icon={<HelpCircle />} label="Support" isOpen={isSidebarOpen} />
-          <NavItem icon={<LogOut />} label="Logout" isOpen={isSidebarOpen} />
+          <NavItem icon={<HelpCircle />} label="Support" isOpen={isSidebarOpen} onClick={() => toast.info("Support feature coming soon")} />
+          <NavItem icon={<LogOut />} label="Logout" isOpen={isSidebarOpen} onClick={() => toast.info("Logout feature coming soon")} />
         </div>
       </aside>
 
@@ -291,12 +303,18 @@ export default function App() {
                 title="Video Calls" 
                 desc="Connect with interpreters via video." 
                 color="bg-white"
+                onClick={() => toast.info("Video Call feature is coming soon!")}
               />
               <DashboardCard 
                 icon={<Globe className="w-6 h-6" />} 
                 title="Global Signs" 
                 desc="Explore 50+ sign language dialects." 
                 color="bg-white"
+                onClick={() => {
+                  setIsChatOpen(true);
+                  startCamera();
+                  toast.success("Opening Global Signs Explorer");
+                }}
               />
             </div>
 
@@ -314,7 +332,12 @@ export default function App() {
                         <p className="text-[10px] md:text-xs text-[#5A5A40] opacity-60">Yesterday at 4:30 PM</p>
                       </div>
                     </div>
-                    <button className="text-xs md:text-sm font-bold text-[#5A5A40] shrink-0">View</button>
+                    <button 
+                      onClick={() => toast.info("Chat history is being synchronized...")}
+                      className="text-xs md:text-sm font-bold text-[#5A5A40] shrink-0"
+                    >
+                      View
+                    </button>
                   </div>
                 ))}
               </div>
@@ -351,17 +374,30 @@ export default function App() {
 
                 <div className="flex items-center gap-2">
                   {/* Language Selector */}
-                  <div className="relative group">
-                    <button className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2 bg-[#F5F5F0] rounded-full text-xs md:text-sm font-medium hover:bg-[#E5E5E0] transition-colors">
+                  <div className="relative">
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsLangMenuOpen(!isLangMenuOpen);
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2 bg-[#F5F5F0] rounded-full text-xs md:text-sm font-medium hover:bg-[#E5E5E0] transition-colors"
+                    >
                       <Globe className="w-3 h-3 md:w-4 md:h-4" />
                       <span className="truncate max-w-[60px] md:max-w-none">{selectedLanguage.name.split(' ')[0]}</span>
-                      <ChevronDown className="w-3 h-3 md:w-4 md:h-4" />
+                      <ChevronDown className={cn("w-3 h-3 md:w-4 md:h-4 transition-transform", isLangMenuOpen && "rotate-180")} />
                     </button>
-                    <div className="absolute right-0 top-full mt-2 w-48 md:w-64 bg-white rounded-2xl shadow-2xl border border-[#E5E5E0] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden">
+                    
+                    <div className={cn(
+                      "absolute right-0 top-full mt-2 w-48 md:w-64 bg-white rounded-2xl shadow-2xl border border-[#E5E5E0] transition-all z-50 overflow-hidden",
+                      isLangMenuOpen ? "opacity-100 visible translate-y-0" : "opacity-0 invisible -translate-y-2"
+                    )}>
                       {SIGN_LANGUAGES.map(lang => (
                         <button
                           key={lang.id}
-                          onClick={() => setSelectedLanguage(lang)}
+                          onClick={() => {
+                            setSelectedLanguage(lang);
+                            setIsLangMenuOpen(false);
+                          }}
                           className={cn(
                             "w-full text-left px-4 py-2 md:py-3 text-xs md:text-sm hover:bg-[#F5F5F0] transition-colors",
                             selectedLanguage.id === lang.id && "bg-[#F5F5F0] font-bold"
@@ -496,9 +532,10 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active = false, isOpen = true }: { icon: React.ReactNode, label: string, active?: boolean, isOpen?: boolean }) {
+function NavItem({ icon, label, active = false, isOpen = true, onClick }: { icon: React.ReactNode, label: string, active?: boolean, isOpen?: boolean, onClick?: () => void }) {
   return (
     <button 
+      onClick={onClick}
       className={cn(
         "w-full flex items-center gap-4 p-3 rounded-xl transition-all",
         active ? "bg-[#F5F5F0] text-[#5A5A40] font-bold" : "text-[#5A5A40] opacity-60 hover:bg-[#F5F5F0] hover:opacity-100"
@@ -510,11 +547,12 @@ function NavItem({ icon, label, active = false, isOpen = true }: { icon: React.R
   );
 }
 
-function DashboardCard({ icon, title, desc, color }: { icon: React.ReactNode, title: string, desc: string, color: string }) {
+function DashboardCard({ icon, title, desc, color, onClick }: { icon: React.ReactNode, title: string, desc: string, color: string, onClick?: () => void }) {
   return (
     <motion.div 
       whileHover={{ y: -5 }}
-      className={cn("p-6 md:p-8 rounded-[24px] md:rounded-[32px] border border-[#E5E5E0] space-y-3 md:space-y-4 shadow-sm", color)}
+      onClick={onClick}
+      className={cn("p-6 md:p-8 rounded-[24px] md:rounded-[32px] border border-[#E5E5E0] space-y-3 md:space-y-4 shadow-sm cursor-pointer", color)}
     >
       <div className="w-10 h-10 md:w-12 md:h-12 bg-[#F5F5F0] rounded-xl md:rounded-2xl flex items-center justify-center text-[#5A5A40]">
         {icon}
