@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { 
   Hand, 
   MessageSquare, 
@@ -87,15 +87,47 @@ export default function App() {
   }, [messages]);
 
   const startCamera = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast.error("Camera API not supported in this browser.");
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        } 
+      });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setIsCapturing(true);
       }
     } catch (err) {
       console.error("Error accessing camera:", err);
-      alert("Please allow camera access to use the Sign Language AI.");
+      
+      // Fallback to basic constraints if advanced ones fail
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          setIsCapturing(true);
+        }
+      } catch (fallbackErr) {
+        console.error("Fallback camera access failed:", fallbackErr);
+        if (fallbackErr instanceof Error) {
+          if (fallbackErr.name === "NotFoundError" || fallbackErr.name === "DevicesNotFoundError") {
+            toast.error("No camera found. Please connect a camera and try again.");
+          } else if (fallbackErr.name === "NotAllowedError" || fallbackErr.name === "PermissionDeniedError") {
+            toast.error("Camera access denied. Please allow camera permissions in your browser.");
+          } else {
+            toast.error(`Camera error: ${fallbackErr.message}`);
+          }
+        } else {
+          toast.error("Could not access camera. Please check your device settings.");
+        }
+      }
     }
   };
 
@@ -126,11 +158,21 @@ export default function App() {
         contents: [
           {
             parts: [
-              { text: `You are an expert sign language interpreter. Translate the sign language gesture in this image into text. The language is ${selectedLanguage.name}. If you see multiple gestures, provide a coherent sentence. If no gesture is clear, say "No gesture detected".` },
+              { text: `You are a world-class expert sign language interpreter. 
+              Analyze the sign language gesture in this image with extreme precision. 
+              Consider hand shapes, movement (if implied), orientation, and facial expressions. 
+              The target language is ${selectedLanguage.name}. 
+              
+              If the gesture is clear, translate it into a natural, meaningful sentence. 
+              If multiple signs are present, interpret the full context. 
+              If no gesture is detected or the image is unclear, respond with "No gesture detected".` },
               { inlineData: { data: base64Image, mimeType: "image/jpeg" } }
             ]
           }
-        ]
+        ],
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
       });
 
       const translation = response.text || "Could not translate.";
@@ -155,13 +197,20 @@ export default function App() {
 
   const getAIResponse = async (userInput: string) => {
     try {
+      // Prepare chat history for context
+      const history = messages.slice(-10).map(msg => ({
+        role: msg.role === "user" ? "user" : "model",
+        parts: [{ text: msg.content }]
+      }));
+
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
+          ...history,
           { role: "user", parts: [{ text: userInput }] }
         ],
         config: {
-          systemInstruction: "You are a helpful assistant for Deaf and hard-of-hearing individuals. Respond concisely and clearly. Use simple language where appropriate."
+          systemInstruction: "You are the 'SignBridge AI', a specialized assistant for the Deaf and hard-of-hearing community. You are empathetic, clear, and concise. You understand that the user might be communicating via sign language translations. Always be supportive and provide helpful information in a way that is easy to read."
         }
       });
 
@@ -367,8 +416,8 @@ export default function App() {
                     <X className="w-6 h-6" />
                   </button>
                   <div className="min-w-0">
-                    <h2 className="font-serif font-bold text-base md:text-xl truncate">AI Emulator</h2>
-                    <p className="text-[10px] md:text-xs text-[#5A5A40] opacity-70">Gemini 3 Flash</p>
+                    <h2 className="font-serif font-bold text-base md:text-xl truncate">SignBridge AI</h2>
+                    <p className="text-[10px] md:text-xs text-[#5A5A40] opacity-70">Powered by Gemini 3 Flash</p>
                   </div>
                 </div>
 
