@@ -49,6 +49,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isAutoMode, setIsAutoMode] = useState(false);
   const [inputText, setInputText] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
@@ -88,46 +89,59 @@ export default function App() {
 
   const startCamera = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast.error("Camera API not supported in this browser.");
+      toast.error("Camera API not supported in this browser. Please use a modern browser like Chrome or Firefox.");
       return;
     }
 
+    // Check if any video devices exist at all
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: "user",
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        } 
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsCapturing(true);
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      if (videoDevices.length === 0) {
+        toast.error("No camera detected on this device. Please connect a webcam.");
+        return;
       }
-    } catch (err) {
-      console.error("Error accessing camera:", err);
-      
-      // Fallback to basic constraints if advanced ones fail
+    } catch (e) {
+      console.warn("Could not enumerate devices:", e);
+    }
+
+    const constraints = [
+      { video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { video: { facingMode: "user" } },
+      { video: true }
+    ];
+
+    let lastError: any = null;
+
+    for (const constraint of constraints) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const stream = await navigator.mediaDevices.getUserMedia(constraint);
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           setIsCapturing(true);
+          toast.success("Camera connected successfully");
+          return; // Success!
         }
-      } catch (fallbackErr) {
-        console.error("Fallback camera access failed:", fallbackErr);
-        if (fallbackErr instanceof Error) {
-          if (fallbackErr.name === "NotFoundError" || fallbackErr.name === "DevicesNotFoundError") {
-            toast.error("No camera found. Please connect a camera and try again.");
-          } else if (fallbackErr.name === "NotAllowedError" || fallbackErr.name === "PermissionDeniedError") {
-            toast.error("Camera access denied. Please allow camera permissions in your browser.");
-          } else {
-            toast.error(`Camera error: ${fallbackErr.message}`);
-          }
-        } else {
-          toast.error("Could not access camera. Please check your device settings.");
-        }
+      } catch (err) {
+        console.warn(`Camera access failed with constraint:`, constraint, err);
+        lastError = err;
       }
+    }
+
+    // If we get here, all attempts failed
+    console.error("All camera access attempts failed:", lastError);
+    if (lastError instanceof Error) {
+      if (lastError.name === "NotFoundError" || lastError.name === "DevicesNotFoundError") {
+        toast.error("Camera not found. Please ensure your webcam is plugged in and recognized by your computer.");
+      } else if (lastError.name === "NotAllowedError" || lastError.name === "PermissionDeniedError") {
+        toast.error("Camera access denied. Please click the camera icon in your browser's address bar to allow access.");
+      } else if (lastError.name === "NotReadableError" || lastError.name === "TrackStartError") {
+        toast.error("Camera is already in use by another application (like Zoom or Teams). Please close other apps and try again.");
+      } else {
+        toast.error(`Camera error: ${lastError.message}`);
+      }
+    } else {
+      toast.error("Could not access camera. Please check your device settings and permissions.");
     }
   };
 
@@ -141,16 +155,25 @@ export default function App() {
 
   const captureAndTranslate = async () => {
     if (!videoRef.current || !canvasRef.current || isProcessing) return;
+    
+    const video = videoRef.current;
+    if (video.readyState < 2 || video.videoWidth === 0) {
+      if (!isAutoMode) toast.error("Camera not ready. Please wait a moment.");
+      return;
+    }
 
     setIsProcessing(true);
     const canvas = canvasRef.current;
-    const video = videoRef.current;
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
-    ctx?.drawImage(video, 0, 0);
+    if (!ctx) {
+      setIsProcessing(false);
+      return;
+    }
+    ctx.drawImage(video, 0, 0);
 
-    const base64Image = canvas.toDataURL("image/jpeg").split(",")[1];
+    const base64Image = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
 
     try {
       const response = await ai.models.generateContent({
@@ -160,12 +183,12 @@ export default function App() {
             parts: [
               { text: `You are a world-class expert sign language interpreter. 
               Analyze the sign language gesture in this image with extreme precision. 
-              Consider hand shapes, movement (if implied), orientation, and facial expressions. 
               The target language is ${selectedLanguage.name}. 
               
-              If the gesture is clear, translate it into a natural, meaningful sentence. 
-              If multiple signs are present, interpret the full context. 
-              If no gesture is detected or the image is unclear, respond with "No gesture detected".` },
+              IMPORTANT: 
+              1. If a clear sign is detected, translate it into a natural sentence.
+              2. If NO sign is being made, or the hands are just resting, respond ONLY with the exact phrase "No gesture detected".
+              3. Do not guess if unsure.` },
               { inlineData: { data: base64Image, mimeType: "image/jpeg" } }
             ]
           }
@@ -175,8 +198,11 @@ export default function App() {
         }
       });
 
-      const translation = response.text || "Could not translate.";
-      if (translation !== "No gesture detected") {
+      const translation = response.text?.trim() || "Could not translate.";
+      
+      if (translation.toLowerCase().includes("no gesture detected")) {
+        if (!isAutoMode) toast.info("No sign detected in this frame.");
+      } else {
         const newMessage: Message = {
           id: Date.now().toString(),
           role: "user",
@@ -190,10 +216,24 @@ export default function App() {
       }
     } catch (err) {
       console.error("Translation error:", err);
+      if (!isAutoMode) toast.error("AI Translation failed. Please try again.");
     } finally {
       setIsProcessing(false);
     }
   };
+
+  // Auto-capture loop
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isAutoMode && isCapturing && isChatOpen) {
+      interval = setInterval(() => {
+        if (!isProcessing) {
+          captureAndTranslate();
+        }
+      }, 3000); // Capture every 3 seconds
+    }
+    return () => clearInterval(interval);
+  }, [isAutoMode, isCapturing, isChatOpen, isProcessing]);
 
   const getAIResponse = async (userInput: string) => {
     try {
@@ -422,6 +462,16 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      setMessages([]);
+                      toast.success("Chat history cleared");
+                    }}
+                    className="p-2 hover:bg-[#F5F5F0] rounded-lg transition-colors text-[#5A5A40] opacity-60 hover:opacity-100"
+                    title="Clear Chat"
+                  >
+                    <History className="w-5 h-5" />
+                  </button>
                   {/* Language Selector */}
                   <div className="relative">
                     <button 
@@ -483,14 +533,24 @@ export default function App() {
                       </div>
                     )}
 
-                    <div className="absolute bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4">
+                    <div className="absolute bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 md:gap-4">
+                      <button 
+                        onClick={() => setIsAutoMode(!isAutoMode)}
+                        className={cn(
+                          "px-4 py-2 md:px-6 md:py-3 rounded-full text-xs md:text-sm font-bold shadow-xl transition-all flex items-center gap-2",
+                          isAutoMode ? "bg-green-600 text-white" : "bg-white/20 text-white backdrop-blur-md border border-white/30"
+                        )}
+                      >
+                        <Sparkles className={cn("w-4 h-4", isAutoMode && "animate-pulse")} />
+                        {isAutoMode ? "Auto ON" : "Auto Mode"}
+                      </button>
                       <button 
                         onClick={captureAndTranslate}
-                        disabled={isProcessing}
+                        disabled={isProcessing || isAutoMode}
                         className="px-6 py-3 md:px-8 md:py-4 bg-white text-[#5A5A40] rounded-full text-sm md:font-bold shadow-xl hover:bg-[#F5F5F0] transition-all flex items-center gap-2 disabled:opacity-50"
                       >
                         <Camera className="w-4 h-4 md:w-5 md:h-5" />
-                        Capture
+                        {isProcessing ? "Processing..." : "Capture"}
                       </button>
                     </div>
                   </div>
